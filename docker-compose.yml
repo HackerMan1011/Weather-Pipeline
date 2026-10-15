@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: my_postgres
+    environment:
+      POSTGRES_USER : ${POSTGRES_USER}
+      POSTGRES_PASSWORD : ${POSTGRES_PASSWORD}
+      POSTGRES_DB : ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgData:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD","pg_isready","-U","${POSTGRES_USER}","-d","${POSTGRES_DB}"]
+      interval: 5s
+      retries: 6
+  
+  weather:
+    image: weather-script:latest
+    build: "."
+    volumes: 
+      - "./output:/usr/python/output"
+  
+  loader:
+    image: weather-script:latest
+    build: "."
+    env_file:
+      - ".env"
+    command: ["python","data_load.py"]
+    volumes: 
+      - "./output:/usr/python/output"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      weather:
+        condition: service_completed_successfully
+
+volumes:
+  pgData:
