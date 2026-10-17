@@ -3,6 +3,7 @@ import logging
 import json
 import os
 import pandas as pd
+import datetime as dt
 
 api_url = 'https://api.open-meteo.com/v1/forecast?latitude=12.968&longitude=80.1502&hourly=temperature_2m,apparent_temperature,precipitation_probability,rain,showers&timezone=auto&forecast_days=14'
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +29,8 @@ logger.addHandler(file_handler)
 logger.debug("Fetching data from Open-Meteo API")
 try:
     response = requests.get(api_url,timeout=15)
+    run_time=dt.datetime.now(dt.timezone.utc)
+    logger.info(f"API call made at : {run_time}")
     response.raise_for_status()
     logger.debug(f"HTTP {response.status_code}")
 except requests.exceptions.Timeout:
@@ -72,6 +75,8 @@ if "hourly" not in data:
 output_path = f"{output_dir}/{output_file}"
 try:
     hourly_fc=pd.DataFrame(data["hourly"])
+    hourly_fc["fetched_at"]=run_time
+    logger.info("API call time updated in CSV file for version history")
     hourly_fc.to_csv(path_or_buf=output_path, index=False)
     logger.info(f'Cleaned data. Total Records - {len(hourly_fc.index)} ,  File located at: {output_dir}, File Name - {output_file}')
 except (OSError,ValueError):
