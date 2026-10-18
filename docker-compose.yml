@@ -15,25 +15,20 @@ services:
       interval: 5s
       retries: 6
   
-  weather:
+  pipeline:
     image: weather-script:latest
     build: "."
-    volumes: 
-      - "./output:/usr/python/output"
-  
-  loader:
-    image: weather-script:latest
-    build: "."
+    environment:
+      POSTGRES_HOST : "postgres"
+      POSTGRES_PORT : "5432"
     env_file:
       - ".env"
-    command: ["python","data_load.py"]
     volumes: 
       - "./output:/usr/python/output"
     depends_on:
       postgres:
-        condition: service_healthy
-      weather:
-        condition: service_completed_successfully
-
+        condition : service_healthy
+    restart: unless-stopped
+  
 volumes:
   pgData:

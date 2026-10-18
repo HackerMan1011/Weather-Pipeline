@@ -1,17 +1,56 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import pandas as pd
 import os
+import logging
+import sqlalchemy.exc
 # import psycopg2
 user = os.environ["POSTGRES_USER"] # get is not used as it prevents null or None return
 password= os.environ["POSTGRES_PASSWORD"]
 database = os.environ["POSTGRES_DB"]
-my_engine = create_engine(f"postgresql+psycopg2://{user}:{password}@postgres:5432/{database}")
+hostname= os.environ.get("POSTGRES_HOST","localhost")
+port_number=os.environ.get("POSTGRES_PORT",5433)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+output_dir = os.path.join(script_dir,'output')
 
-cur_dir=os.path.join(os.path.dirname(os.path.abspath(__file__)),"output")
-df=pd.read_csv(f"{cur_dir}/raw_forecast_data.csv")
-df.to_sql(name='weather_hourly',con=my_engine,if_exists='replace',index=False)
+#Log setup
+logger=logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+formatter=logging.Formatter('%(asctime)s : [%(levelname)s] : %(name)s : %(message)s')
+file_handler=logging.FileHandler(f'{output_dir}/data_load.log')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
 
-result = pd.read_sql("SELECT COUNT(*) FROM weather_hourly", con=my_engine)
-print(result)
-result = pd.read_sql("SELECT * FROM weather_hourly LIMIT 5", con=my_engine)
-print(result)
+logger.info("Data load started.")
+my_engine = create_engine(f"postgresql+psycopg2://{user}:{password}@{hostname}:{port_number}/{database}")
+
+try:
+    df=pd.read_csv(f"{output_dir}/transformed_forecast_data.csv")
+except FileNotFoundError:
+    logger.error(f"File does not exists at {output_dir}")
+    raise
+else:
+    logger.info(f"Reading CSV file for load. Record count : {len(df)}")
+    rows_to_be_inserted=df.to_dict('records')
+
+
+try:
+    with my_engine.begin() as conn:
+        conn.execute(text("""create table if not exists weather_hourly_raw (
+                            time timestamptz not null,
+                            temperature_2m float not null,
+                            apparent_temperature float not null,
+                            precipitation_probability int not null,
+                            rain float not null,
+                            showers float not null,
+                            fetched_at timestamptz not null,
+                            primary key (time,fetched_at)
+                    );""")) 
+        logger.info('Database connection established.')
+        result=conn.execute(text(""" INSERT INTO weather_hourly_raw (time,temperature_2m,apparent_temperature,precipitation_probability, rain, showers, fetched_at)
+                              values (:time,:temperature_2m,:apparent_temperature,:precipitation_probability,:rain,:showers,:fetched_at) ON CONFLICT (time,fetched_at) DO NOTHING;"""),rows_to_be_inserted)
+        logger.info(f'Skipping {len(df)-result.rowcount} records. Only {result.rowcount} new records inserted.')
+except sqlalchemy.exc.SQLAlchemyError as e:
+    logger.exception(f"DB step failed. Error : {e}")
+    raise
+
