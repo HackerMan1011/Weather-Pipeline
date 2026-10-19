@@ -24,6 +24,7 @@ Around the stages:
 - **Idempotent load.** Loading the same run twice inserts nothing (conflicts are skipped); a new run adds new rows.
 - **Atomic load.** The table creation and insert run in one transaction, so a failed load leaves all rows or none.
 - **Failure handling.** A failed stage is logged with its name and exit code, later stages do not run, and nothing is loaded. The scheduler stays alive and tries again at the next interval.
+- **Retry with backoff.** Extract retries timeouts, connection errors and 5xx responses up to 5 times, waiting 5s, 10s, 20s and 40s between attempts. 4xx errors fail immediately because retrying a bad request cannot help. If every attempt fails, Extract exits non-zero and the failure handling above applies.
 - **Logging.** Each stage writes its own log file to `output/`.
 
 ## Tech stack
@@ -74,5 +75,6 @@ docs/architecture.png  architecture diagram
 ## Limitations
 
 - No resume from the failed stage: the next run starts again from Extract.
+- Retries cover only the API call. A failure in a later stage still waits for the next scheduled interval.
 - The table grows without limit (336 rows per run, about 1,344 a day at 6-hour intervals) and there is no retention policy.
 - The location and forecast length are fixed in the script.

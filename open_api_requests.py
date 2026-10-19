@@ -4,6 +4,7 @@ import json
 import os
 import pandas as pd
 import datetime as dt
+from time import sleep
 
 api_url = 'https://api.open-meteo.com/v1/forecast?latitude=12.968&longitude=80.1502&hourly=temperature_2m,apparent_temperature,precipitation_probability,rain,showers&timezone=auto&forecast_days=14'
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,23 +26,32 @@ logger.addHandler(file_handler)
 
 
 #TODO 1: Get data from API and store it as a JSON
-
+MAX_ATTEMPTS = 5
+wait = 5
 logger.debug("Fetching data from Open-Meteo API")
-try:
-    response = requests.get(api_url,timeout=15)
-    run_time=dt.datetime.now(dt.timezone.utc)
-    logger.info(f"API call made at : {run_time}")
-    response.raise_for_status()
-    logger.debug(f"HTTP {response.status_code}")
-except requests.exceptions.Timeout:
-    logger.exception("API request timed out")
-    raise
-except requests.exceptions.ConnectionError:
-    logger.exception("API connection failed")
-    raise
-except requests.exceptions.HTTPError as e:
-    logger.exception(f"API returned an error code : {e}")
-    raise
+for attempt in range(1, MAX_ATTEMPTS + 1):
+    try:
+        response = requests.get(api_url, timeout=15)
+        response.raise_for_status()
+        run_time = dt.datetime.now(dt.timezone.utc)
+        logger.info(f"API call made at : {run_time}")
+        logger.debug(f"HTTP {response.status_code}")
+        break
+    except (requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.HTTPError) as e:
+        if isinstance(e, requests.exceptions.HTTPError):
+            retry_flag = e.response.status_code >= 500
+        else:
+            retry_flag = True
+
+        if not retry_flag or attempt == MAX_ATTEMPTS:
+            logger.exception(f"API call failed, giving up (attempt {attempt}): {e}")
+            raise
+        logger.warning(f"Attempt {attempt} failed: {e}. Retrying in {wait}s")
+        sleep(wait)
+        wait *= 2
+
 
 data = response.json()
 try:
