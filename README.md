@@ -55,6 +55,8 @@ You need Docker and Docker Compose.
    ```
    Each run shows up as one `fetched_at` value with 336 rows.
 
+   ![Sample results](docs/sample_results.png)
+
 To stop everything: `docker compose down`. Add `-v` to also delete the database volume (and with it, the whole run history).
 
 ## Project layout
