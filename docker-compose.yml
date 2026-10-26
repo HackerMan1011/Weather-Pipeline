@@ -10,6 +10,9 @@ services:
       - "5433:5432"
     volumes:
       - pgData:/var/lib/postgresql/data
+    networks:
+      - default
+      - weather_net
     healthcheck:
       test: ["CMD","pg_isready","-U","${POSTGRES_USER}","-d","${POSTGRES_DB}"]
       interval: 5s
@@ -32,3 +35,7 @@ services:
   
 volumes:
   pgData:
+
+networks:
+  weather_net:
+    external: true
