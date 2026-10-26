@@ -1,6 +1,6 @@
 # Weather Pipeline
 
-Weather forecasts change from one run to the next. This pipeline pulls a 14-day hourly forecast for one location from the [Open-Meteo API](https://open-meteo.com/) every 6 hours and keeps every run in Postgres, so you can see how the forecast for the same hour changed over time. It is a batch ETL pipeline: four separate Python stages run in order under a scheduler, and everything starts with one command, `docker compose up`.
+Weather forecasts change from one run to the next. This pipeline pulls a 14-day hourly forecast for one location from the [Open-Meteo API](https://open-meteo.com/) every 6 hours and keeps every run in Postgres, so you can see how the forecast for the same hour changed over time. It is a batch ETL pipeline: four separate Python stages run in order under a scheduler, and everything starts with one command, `docker compose up`. The same four stages also run as an Apache Airflow DAG (see [Orchestration with Airflow](#orchestration-with-airflow)).
 
 ## Architecture
 
@@ -59,6 +59,43 @@ You need Docker and Docker Compose.
 
 To stop everything: `docker compose down`. Add `-v` to also delete the database volume (and with it, the whole run history).
 
+## Orchestration with Airflow
+
+The `airflow/` folder runs the same four stages as an Airflow 3 DAG (`weather_pipeline_dag`) with the Celery executor, instead of the built-in `scheduler.py`.
+
+**How the DAG works**
+
+- Four `PythonOperator` tasks run in order: `extract >> transform >> validate >> load`. Each task calls the stage's `main()`. The stage modules are imported inside the task functions, so parsing the DAG never runs pipeline code.
+- Schedule `0 */6 * * *` (00:00, 06:00, 12:00 and 18:00 UTC), `catchup=False` and `max_active_runs=1`.
+- If a task fails, the tasks after it are marked `upstream_failed` and do not run. Validation raises an error on any failed check, so bad data never reaches `load`.
+
+**Retries**
+
+| Task | Retries | Why |
+|---|---|---|
+| `extract` | 1, after 5 minutes | The script already makes up to 5 attempts with backoff on transient errors; this covers a longer outage. |
+| `transform` | 0 | Deterministic: the same input always gives the same output, so a retry cannot help. |
+| `validate` | 0 | Deterministic: a failed check means the data is bad. Fail fast so nothing bad is loaded. |
+| `load` | 2, after 2 minutes each | Database errors can be transient. The load is one transaction and idempotent, so a retry is safe. |
+
+`max_active_runs=1` is there because the stages pass data to each other through CSV files in the shared `output/` folder, so two overlapping runs could overwrite each other's files. `catchup=False` skips missed intervals instead of replaying them, which is what a forecast pipeline wants.
+
+**Run it**
+
+1. Create the shared Docker network once: `docker network create weather_net`
+2. From the repo root, start only the database: `docker compose up -d postgres`. Do not start the `pipeline` service as well, or its own scheduler and Airflow would both write to the same table.
+3. `cd airflow`, then `cp .env.example .env` and fill in `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` with the same values as the root `.env`. Keep `POSTGRES_HOST=my_postgres` and `POSTGRES_PORT=5432`.
+4. First time only: `docker compose up airflow-init`. Then `docker compose up -d`.
+5. Open http://localhost:8080 (login `airflow` / `airflow`) and unpause `weather_pipeline_dag`.
+
+**How the two stacks connect**
+
+The Postgres stack and the Airflow stack each have their own default Docker network, so containers in one cannot see the other. `weather_net` is a shared network created outside both Compose files and declared `external: true` in each, so Compose uses it and never creates or deletes it. Docker's built-in DNS lets containers on it find each other by name.
+
+- The database container joins `weather_net` as well as its default network.
+- Only the Airflow `worker` joins `weather_net`, because it is the only service that runs the `load` task.
+- Both stacks have a service called `postgres`, and Airflow has its own metadata database. So the load connects to `my_postgres`, the unique `container_name` of the weather database, on the container port 5432. `localhost` would mean the worker container itself.
+
 ## Project layout
 
 ```
@@ -72,11 +109,15 @@ docker-compose.yml     the postgres and pipeline services
 requirements.txt       pinned Python dependencies
 .env.example           template for the settings
 docs/architecture.png  architecture diagram
+airflow/               Airflow stack: docker-compose.yaml, dags/weather_pipeline_dag.py, .env.example
 ```
 
 ## Limitations
 
 - No resume from the failed stage: the next run starts again from Extract.
-- Retries cover only the API call. A failure in a later stage still waits for the next scheduled interval.
+- Retries cover only the API call in the standalone scheduler. Under Airflow, `load` also retries, but a failure in `transform` or `validate` still waits for the next scheduled run (or a manual re-run).
+- No alerting. A failed run is only visible in the Airflow UI or the logs, so someone has to check. I would add failure callbacks (email or Slack), plus a freshness check that alerts when no new `fetched_at` has landed in the last few hours.
+- The stages share files in the `output/` folder, so safety against overlapping runs comes from `max_active_runs=1`, not from the design. It would also break with workers on different machines. I would write to run-scoped paths or object storage, or use a staging table.
+- The data is only a raw landing table. There is no modelling layer (such as averages or views) on top of it yet.
 - The table grows without limit (336 rows per run, about 1,344 a day at 6-hour intervals) and there is no retention policy.
 - The location and forecast length are fixed in the script.
