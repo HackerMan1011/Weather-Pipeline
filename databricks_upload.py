@@ -3,10 +3,10 @@ import logging, sys
 from time import sleep
 import datetime as dt
 
-retry_flag=False
 script_dir=os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.join(script_dir,'output')
 output_file='transformed_forecast_data.csv'
+os.makedirs(output_dir,exist_ok=True)
 
 #Log setup
 logger=logging.getLogger(__name__)
@@ -30,7 +30,7 @@ def main():
     MAX_ATTEMPTS = 5
     wait = 5
     try:
-        with open(os.path.join(output_dir,output_file),'r') as f:
+        with open(os.path.join(output_dir,output_file),'rb') as f:
             passed_data=f.read()
             logger.info("Readying CSV file for loading into Databricks")
             for attempt in range(1,MAX_ATTEMPTS+1):
