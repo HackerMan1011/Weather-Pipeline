@@ -32,6 +32,7 @@ services:
       postgres:
         condition : service_healthy
     restart: unless-stopped
+    profiles: ["standalone"]
   
 volumes:
   pgData:

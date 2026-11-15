@@ -39,7 +39,7 @@ In Databricks (Airflow only) the same rows go into a Delta table of the same nam
 
 ## Run it
 
-This section starts the standalone version, with the built-in `scheduler.py` and no Airflow. For the Airflow version, see [Orchestration with Airflow](#orchestration-with-airflow). Do not run both at the same time (see [Limitations](#limitations)).
+This section starts the standalone version, with the built-in `scheduler.py` and no Airflow. For the Airflow version, see [Orchestration with Airflow](#orchestration-with-airflow). The scheduler service is behind the `standalone` Compose profile, so a plain `docker compose up -d` starts only Postgres. Do not run the standalone version and Airflow at the same time (see [Limitations](#limitations)).
 
 You need Docker and Docker Compose.
 
@@ -49,9 +49,9 @@ You need Docker and Docker Compose.
    cp .env.example .env
    ```
    It holds the database credentials, `SCHEDULE_INTERVAL_MINUTES`, and `POSTGRES_HOST` / `POSTGRES_PORT` for running the scripts outside Docker (inside Compose, the host and port are set for you).
-3. Build and start everything:
+3. Build and start Postgres and the scheduler:
    ```
-   docker compose up --build -d
+   docker compose --profile standalone up --build -d
    ```
    The first pipeline run starts immediately. Follow it in `output/scheduler.log`.
 4. Look at the data: connect any Postgres client (pgAdmin, psql) to `localhost`, port `5433`, with the database name, user and password from your `.env`, and run:
@@ -62,7 +62,7 @@ You need Docker and Docker Compose.
 
    ![Sample results](docs/sample_results.png)
 
-To stop everything: `docker compose down`. Add `-v` to also delete the database volume (and with it, the whole run history).
+To stop everything: `docker compose --profile standalone down`. Add `-v` to also delete the database volume (and with it, the whole run history).
 
 ## Orchestration with Airflow
 
@@ -91,7 +91,7 @@ The `airflow/` folder runs the same four stages as an Airflow 3 DAG (`weather_pi
 **Run it**
 
 1. Create the shared Docker network once: `docker network create weather_net`
-2. From the repo root, start only the database: `docker compose up -d postgres`. Do not start the `pipeline` service as well, or its own scheduler and Airflow would both write to the same table.
+2. From the repo root, start the database: `docker compose up -d`. The standalone `pipeline` service is behind a profile, so this starts only Postgres. Do not enable that profile while Airflow is running, or its scheduler and Airflow would both write to the same `output/` folder and table.
 3. `cd airflow`, then `cp .env.example .env` and fill in `POSTGRES_USER`, `POSTGRES_PASSWORD` and `POSTGRES_DB` with the same values as the root `.env`. Keep `POSTGRES_HOST=my_postgres` and `POSTGRES_PORT=5432`.
 4. First time only: `docker compose up airflow-init`. Then `docker compose up -d --build`. The `--build` is needed because the Airflow image is built from `airflow/Dockerfile` (it adds the Databricks provider).
 5. Open http://localhost:8080 (login `airflow` / `airflow`) and unpause `weather_pipeline_dag`.
@@ -157,7 +157,7 @@ data_load.py           load: append the rows into Postgres
 databricks_upload.py   upload: send the transformed CSV to a Databricks volume (Airflow only)
 scheduler.py           run extract, transform, validate and load in order, on a schedule (standalone mode, without Airflow)
 Dockerfile             image used by the pipeline service
-docker-compose.yml     the postgres and pipeline services
+docker-compose.yml     the postgres service, and the standalone pipeline service (profile `standalone`)
 requirements.txt       pinned Python dependencies
 .env.example           template for the settings
 docs/architecture.png  architecture diagram
@@ -183,7 +183,7 @@ airflow/               Airflow stack: docker-compose.yaml, Dockerfile, dags/weat
 
 - No alerting. A failed run is only visible in the Airflow UI or the logs, so someone has to check. I would add failure callbacks (email or Slack), plus a freshness check that alerts when no new `fetched_at` has landed in the last few hours.
 - The stages share files in the `output/` folder, so safety against overlapping runs comes from `max_active_runs=1`, not from the design. It would also break with workers on different machines. 
-- The standalone `pipeline` service (`scheduler.py`) is superseded by Airflow but is still in `docker-compose.yml`, and it writes to the same `output/` folder. `docker compose up` starts it, and running it alongside Airflow can overwrite a CSV while another stage is using it, so the two stores then receive different batches. For now, start only Postgres (`docker compose up -d postgres`). The fix is to retire the service (or put it behind a Compose profile so `up` does not start it).
+- The standalone `pipeline` service (`scheduler.py`) is superseded by Airflow and now sits behind the `standalone` Compose profile, so a plain `docker compose up` does not start it. It still writes to the same `output/` folder as Airflow, so enabling the profile while Airflow runs can overwrite a CSV while another stage is using it, and the two stores then receive different batches. The full fix is to retire the service, or to give each run its own output path.
 - The Postgres table grows without limit (336 rows per run, about 1,344 a day at 6-hour intervals) and there is no retention policy.
 - The location and forecast length are fixed in the script.
 - There is no modelling layer yet (tested models, views, documentation) on top of the raw data.
